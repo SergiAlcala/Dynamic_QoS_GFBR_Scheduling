@@ -56,10 +56,16 @@ NrMacSchedulerOfdmaDPP::CreateUeRepresentation(
     NrMacSchedulerUeInfoDPP::SetDppV (m_v_lyapunov);
 
     NS_LOG_FUNCTION(this);
-    return std::make_shared<NrMacSchedulerUeInfoDPP>(
+    auto uePtr = std::make_shared<NrMacSchedulerUeInfoDPP>(
         params.m_rnti,
         params.m_beamConfId,
         std::bind(&NrMacSchedulerOfdmaDPP::GetNumRbPerRbg, this));
+
+    // Store in fast lookup map
+    
+    m_dppUeMap.emplace(params.m_rnti, uePtr);
+
+    return uePtr;
 }
 
 void
@@ -241,6 +247,56 @@ NrMacSchedulerOfdmaDPP::saveTBS(
     {
         outputFileTBS << Simulator::Now().ToDouble(Time::MS) << "\t" <<  ue.first->m_rnti << "\t" << ue.first->m_dlTbSize.at(0) << "\n";
     }
+}
+void
+NrMacSchedulerOfdmaDPP::UpdateUeDlGfbr(uint16_t rnti,
+                                       uint64_t newGfbr)
+{
+    
+    auto it = m_dppUeMap.find(rnti);
+
+    if (it == m_dppUeMap.end())
+    {
+        NS_LOG_WARN("UE " << rnti << " not found in DPP map");
+        return;
+    }
+
+    auto uePtr = it->second;
+
+    uePtr->m_dynamicGfbr = newGfbr;
+
+    NS_LOG_INFO("Updating GFBR for UE " << rnti
+                 << " to " << newGfbr << " bps at "
+                 << Simulator::Now().GetSeconds() << " s");
+
+    NS_LOG_UNCOND("[SCHED UPDATE] Time "
+              << Simulator::Now().GetSeconds()
+              << "s | RNTI=" << rnti
+              << " | GFBR set to "
+              << newGfbr / 1e6
+              << " Mbps");
+    std::cout << "UPDATE PTR: " << it->second.get() << std::endl;
+
+//    for (auto & lcgPair : uePtr->m_dlLCG)
+//     {
+//         auto& lcgPtr = lcgPair.second;
+
+//         std::vector<uint8_t> activeLcs = lcgPtr->GetActiveLCIds();
+
+//         for (auto lcId : activeLcs)
+//         {
+//             if (lcgPtr->GetTotalSizeOfLC(lcId) > 0)
+//             {
+//                 auto& lc = lcgPtr->GetLC(lcId);
+//                 lc->m_eRabGuaranteedBitrateDl = newGfbr;
+
+//                 std::cout << "[GFBR WRITE] RNTI=" << rnti
+//                         << " LC=" << unsigned(lcId)
+//                         << " GFBR=" << newGfbr/1e6 << " Mbps"
+//                         << std::endl;
+//             }
+//         }
+//     }
 }
 
 } // namespace ns3

@@ -14,6 +14,8 @@
 
 #include <ctime>
 
+#include <iomanip>
+
 namespace ns3
 {
 
@@ -24,6 +26,11 @@ double NrMacSchedulerUeInfoDPP::m_v_lyapunov = 5.1e6;
 std::ofstream outputFileG("g.txt");
 std::ofstream outputFileQ("q.txt");
 std::ofstream outputFileAlpha("alpha.txt");
+
+static std::ofstream qosFile("qos_trace.csv");
+static bool qosHeaderWritten = false;
+
+
 
 void
 NrMacSchedulerUeInfoDPP::UpdateDlTputVirtualQueue(const NrMacSchedulerNs3::FTResources& assigned,
@@ -47,22 +54,77 @@ NrMacSchedulerUeInfoDPP::UpdateDlTputVirtualQueue(const NrMacSchedulerNs3::FTRes
     {
         m_currTputDl = 0.0;
     }
-    uint32_t avg_gfbr = 0.0, gfbr = 0.0;
-    int i = 0;
-    for (const auto& ueLcg : m_dlLCG){
-        std::vector<uint8_t> ueActiveLCs = ueLcg.second->GetActiveLCIds();
-        for (const auto lcId : ueActiveLCs){
-            std::unique_ptr<NrMacSchedulerLC>& LCPtr = ueLcg.second->GetLC(lcId);
-            gfbr += unsigned(LCPtr->m_eRabGuaranteedBitrateDl);
-            i++;
-            NS_LOG_DEBUG("LC" << LCPtr->m_id << " - GFBR = " << unsigned(LCPtr->m_eRabGuaranteedBitrateDl));
-        }
-    }
-    avg_gfbr = gfbr/i;
+    // uint32_t avg_gfbr = 0.0, gfbr = 0.0;
+    // int i = 0;
+    // std::unique_ptr<NrMacSchedulerLC>* lastLCPtr = nullptr;
+    // for (const auto& ueLcg : m_dlLCG){
+    //     std::vector<uint8_t> ueActiveLCs = ueLcg.second->GetActiveLCIds();
+    //     for (const auto lcId : ueActiveLCs){
+    //         std::unique_ptr<NrMacSchedulerLC>& LCPtr = ueLcg.second->GetLC(lcId);
+    //         gfbr += unsigned(LCPtr->m_eRabGuaranteedBitrateDl);
+    //         lastLCPtr = &LCPtr;
+    //         i++;
+    //         NS_LOG_DEBUG("LC" << LCPtr->m_id << " - GFBR = " << unsigned(LCPtr->m_eRabGuaranteedBitrateDl));
+
+    //         NS_LOG_UNCOND("[DPP READ] Time "
+    //           << Simulator::Now().GetSeconds()
+    //           << "s | UE "
+    //           << m_rnti
+    //           << " | Current GFBR="
+    //           << gfbr / 1e6
+    //           << " Mbps"
+    //           << "READ PTR: " << this );
+              
+    //     }
+    // }
+    
+    // avg_gfbr = gfbr/i;
+    double avg_gfbr = static_cast<double>(m_dynamicGfbr);
     NS_LOG_DEBUG("UE" << m_rnti << " - AVRG_GFBR = " << avg_gfbr);
 
     m_g = std::max(m_g + avg_gfbr - m_currTputDl, 0.0);
     NS_LOG_DEBUG("m_currTputDl = " << m_currTputDl << ", G de rnti " << m_rnti << " actualizada a " << m_g);
+    NS_LOG_UNCOND("[DPP STATE] Time "
+              << Simulator::Now().GetSeconds()
+              << "s | UE "
+              << m_rnti
+              << " | Throughput="
+              << m_currTputDl / 1e6
+              << " Mbps | GFBR="
+              << avg_gfbr / 1e6
+              << " Mbps | g="
+              << m_g);
+    // if (lastLCPtr != nullptr)
+    // {
+    //     std::cout << "[DPP DEBUG] RNTI=" << m_rnti
+    //           << " LC GFBR="
+    //           << (*lastLCPtr)->m_eRabGuaranteedBitrateDl / 1e6
+    //           << " Mbps"
+    //           << std::endl;
+    // }
+
+        if (!qosHeaderWritten)
+    {
+        qosFile << "time,rnti,throughput_mbps,gfbr_mbps,g\n";
+        qosHeaderWritten = true;
+    }
+
+    // // Avoid division by zero
+    // double avg_gfbr_mbps = 0.0;
+    // if (i > 0)
+    // {
+    //     avg_gfbr_mbps = (double)avg_gfbr / 1e6;
+    // }
+
+    qosFile << std::fixed << std::setprecision(6)
+            << Simulator::Now().GetSeconds() << ","
+            << m_rnti << ","
+            << m_currTputDl / 1e6 << ","
+            << avg_gfbr << ","
+            << m_g
+            << "\n";
+
+    qosFile.flush();
 }
 
 void NrMacSchedulerUeInfoDPP::saveQueuesState(const std::vector<ns3::NrMacSchedulerNs3::UePtrAndBufferReq> ueVector){
@@ -179,5 +241,7 @@ bool NrMacSchedulerUeInfoDPP::CompareUeWeightsDl(const NrMacSchedulerNs3::UePtrA
 {   
     return false;
 }
+
+
 
 } // namespace ns3

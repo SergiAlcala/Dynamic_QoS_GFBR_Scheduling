@@ -7,6 +7,8 @@
 #pragma once
 
 #include "nr-mac-scheduler-ofdma.h"
+#include "nr-mac-scheduler-ue-info-dpp.h"
+#include <unordered_map>
 
 namespace ns3
 {
@@ -60,6 +62,7 @@ class NrMacSchedulerOfdmaDPP : public NrMacSchedulerOfdma
      * @return
      */
     //double GetVlyapunov() const;
+    void UpdateUeDlGfbr(uint16_t rnti, uint64_t newGfbr);
 
   protected:
     /**
@@ -133,10 +136,13 @@ class NrMacSchedulerOfdmaDPP : public NrMacSchedulerOfdma
     BeamSymbolMap AssignDLRBG(uint32_t symAvail, const ActiveUeMap& activeDl) const override;
 
     static void saveTBS(const std::vector<ns3::NrMacSchedulerNs3::UePtrAndBufferReq> ueVector);
+    
 
   private:
     double m_v_lyapunov; // V config parameter for Lyaponuv drif-plus-penalty
     bool m_enableVirtualQueue;
+    mutable  std::unordered_map<uint16_t,
+    std::shared_ptr<NrMacSchedulerUeInfoDPP>> m_dppUeMap;
 };
 
 } // namespace ns3

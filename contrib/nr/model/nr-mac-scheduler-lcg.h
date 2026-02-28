@@ -72,6 +72,7 @@ class NrMacSchedulerLC
     uint8_t m_qci{0};                //!< QoS Class Identifier of the flow
     uint8_t m_priority{0}; //!< the priority associated with the QCI of the flow 3GPP 23.203
     uint64_t m_eRabGuaranteedBitrateDl{UINT64_MAX}; //!< ERAB guaranteed bit rate DL
+    
 };
 
 /**
@@ -201,6 +202,8 @@ class NrMacSchedulerLCG
      * \param type String representing the type of allocation currently in act (DL or UL)
      */
     void AssignedData(uint8_t lcId, uint32_t size, std::string type);
+
+    std::vector<uint8_t> GetAllLCIds() const; //!< Get a vector with all the LC IDs present in this LCG
 
   private:
     uint8_t m_id{0};                            //!< ID of the LCG

@@ -6,5 +6,7 @@ build/
 *.csv
 *.txt
 *.png
+Forecasting_results/*
+sim_DR_GFBR_analysis/*
 
 

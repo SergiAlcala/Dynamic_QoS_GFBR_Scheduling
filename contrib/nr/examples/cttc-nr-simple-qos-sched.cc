@@ -69,7 +69,7 @@ main(int argc, char* argv[])
     double bandwidth = 5e6;
     double totalTxPower = 43;
 
-    bool enableOfdma = false;
+    bool enableOfdma = true;
 
     uint8_t priorityTrafficScenario = 0; // default is saturation
 
@@ -206,7 +206,7 @@ main(int argc, char* argv[])
     std::string sched;
 
     subType = enableOfdma == false ? "Tdma" : "Ofdma";
-    sched = "Qos";
+    sched = "DPP";
     schedulerType << "ns3::NrMacScheduler" << subType << sched;
     std::cout << "SchedulerType: " << schedulerType.str() << std::endl;
     nrHelper->SetSchedulerTypeId(TypeId::LookupByName(schedulerType.str()));

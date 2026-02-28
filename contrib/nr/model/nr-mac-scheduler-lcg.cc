@@ -14,6 +14,20 @@ namespace ns3
 
 NS_LOG_COMPONENT_DEFINE("NrMacSchedulerLCG");
 
+std::vector<uint8_t>
+NrMacSchedulerLCG::GetAllLCIds() const
+{
+    std::vector<uint8_t> ids;
+
+    for (const auto & lcPair : m_lcMap)
+    {
+        ids.push_back(lcPair.first);
+    }
+
+    return ids;
+}
+
+
 NrMacSchedulerLC::NrMacSchedulerLC(const LogicalChannelConfigListElement_s& conf)
     : m_id(conf.m_logicalChannelIdentity)
 {

@@ -21,6 +21,27 @@ namespace ns3
 NS_LOG_COMPONENT_DEFINE("TrafficGenerator3gppGenericVideo");
 NS_OBJECT_ENSURE_REGISTERED(TrafficGenerator3gppGenericVideo);
 
+
+void
+TrafficGenerator3gppGenericVideo::SetDynamicDataRate(double newRateMbps)
+{
+    m_dataRate = newRateMbps;
+
+    // Recompute mean packet size
+    m_meanPacketSize = (m_dataRate * 1e6) / (m_fps) / 8;
+
+    // Recreate packet size random variable
+    m_packetSize = CreateObject<NormalRandomVariable>();
+    m_packetSize->SetAttribute("Mean", DoubleValue(m_meanPacketSize));
+    m_packetSize->SetAttribute("Variance",
+        DoubleValue(m_stdRatioPacketSize * m_meanPacketSize));
+
+    NS_LOG_INFO("Dynamic DataRate update → "
+                << m_dataRate << " Mbps, "
+                << "meanPacketSize=" << m_meanPacketSize);
+}
+
+
 TypeId
 TrafficGenerator3gppGenericVideo::GetTypeId()
 {

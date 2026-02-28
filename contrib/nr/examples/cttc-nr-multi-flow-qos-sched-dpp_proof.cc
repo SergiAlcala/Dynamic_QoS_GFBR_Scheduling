@@ -33,7 +33,7 @@ main(int argc, char* argv[])
     double bandwidth = 10e6;
     double totalTxPower = 43;
 
-    bool enableOfdma = false;
+    bool enableOfdma = true;
     std::string schedulerType = "DPP";
     bool enableQoSLcScheduler = false;
 
@@ -393,7 +393,7 @@ main(int argc, char* argv[])
     dlClientUe2flow.SetAttribute("Interval", TimeValue(Seconds(1.0 / lambda2)));
 
     GbrQosInformation qosUe2flow;
-    qosUe2flow.gbrDl = 15e6; // Downlink GBR
+    qosUe2flow.gbrDl = 20e6; // Downlink GBR
 
     // The bearer that will carry Ue 2 Flows DC GBR traffic
     EpsBearer ue2flowDcGbrBearer(EpsBearer::GBR_LIVE_UL_76, qosUe2flow);
@@ -414,7 +414,7 @@ main(int argc, char* argv[])
     dlClientUe3flow.SetAttribute("Interval", TimeValue(Seconds(1.0 / lambda3)));
 
     GbrQosInformation qosUe3flow;
-    qosUe3flow.gbrDl = 15e6; // Downlink GBR
+    qosUe3flow.gbrDl = 20e6; // Downlink GBR
 
     // The bearer that will carry Ue 2 Flows DC GBR traffic
     EpsBearer ue3flowDcGbrBearer(EpsBearer::GBR_LIVE_UL_76, qosUe3flow);

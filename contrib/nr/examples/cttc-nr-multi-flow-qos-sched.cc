@@ -64,8 +64,8 @@ main(int argc, char* argv[])
     double bandwidth = 10e6;
     double totalTxPower = 43;
 
-    bool enableOfdma = false;
-    std::string schedulerType = "PF";
+    bool enableOfdma = true;
+    std::string schedulerType = "DPP";
     bool enableQoSLcScheduler = false;
 
     uint8_t priorityTrafficScenario = 0; // default is saturation

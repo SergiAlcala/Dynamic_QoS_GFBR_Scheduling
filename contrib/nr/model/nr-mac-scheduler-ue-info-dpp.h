@@ -117,5 +117,8 @@ class NrMacSchedulerUeInfoDPP : public NrMacSchedulerUeInfo
     double m_g{0.0}; //!<  Virtual queues
     uint32_t m_dlRBGallocated{0}; //!< RBGs assigned by the scheduler
     static double m_v_lyapunov; //!<  V config parameter for Lyaponuv drif-plus-penalty
+    uint64_t m_dynamicGfbr{0};
+
+    
 };
 } // namespace ns3

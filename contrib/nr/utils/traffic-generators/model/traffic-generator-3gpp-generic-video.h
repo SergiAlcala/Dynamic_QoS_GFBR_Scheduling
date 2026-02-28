@@ -57,6 +57,8 @@ class TrafficGenerator3gppGenericVideo : public TrafficGenerator
                                     Time packetDelay,
                                     Time packetDelayJitter);
 
+    
+    void SetDynamicDataRate(double newRateMbps);
   protected:
     void DoInitialize() override;
 

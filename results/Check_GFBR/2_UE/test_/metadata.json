@@ -1,0 +1,36 @@
+{
+    "timestamp": "2026-02-13T10:38:44.580012Z",
+    "ue_count": 2,
+    "gNbNum": 1,
+    "radio": {
+        "numerology": 1,
+        "bandwidth_hz": 5000000.0,
+        "central_frequency_hz": 4000000000.0,
+        "total_tx_power_dbm": 43,
+        "ofdma_enabled": true
+    },
+    "traffic": [
+        {
+            "ue_id": 0,
+            "type": "GBR",
+            "five_qi": "GBR_CONV_VOICE",
+            "packet_size_bytes": 3000,
+            "lambda_pkt_per_s": 1000,
+            "offered_load_mbps": 24.0,
+            "gbr_dl_bps": 5000000.0,
+            "mbr_dl_bps": 30000000.0
+        },
+        {
+            "ue_id": 1,
+            "type": "NGBR",
+            "five_qi": "NGBR_LOW_LAT_EMBB",
+            "packet_size_bytes": 3000,
+            "lambda_pkt_per_s": 1000,
+            "offered_load_mbps": 24.0
+        }
+    ],
+    "simulation": {
+        "sim_time_s": 3,
+        "priorityTrafficScenario": 0
+    }
+}
