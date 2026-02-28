@@ -8,5 +8,7 @@ build/
 *.png
 Forecasting_results/*
 sim_DR_GFBR_analysis/*
+.vscode/*
+results/*
 
 
