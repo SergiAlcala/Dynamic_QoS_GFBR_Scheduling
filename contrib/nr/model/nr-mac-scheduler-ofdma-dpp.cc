@@ -84,7 +84,9 @@ NrMacSchedulerOfdmaDPP::AssignedDlResources(const UePtrAndBufferReq& ue,
 {
     NS_LOG_FUNCTION(this);
     auto uePtr = std::dynamic_pointer_cast<NrMacSchedulerUeInfoDPP>(ue.first);
-    double timeSlot = 1e-3;
+    // double timeSlot = 1e-3;
+    // double timeSlot = 0.5e-3;
+    double timeSlot = m_timeSlot;
     if(m_enableVirtualQueue)
     {
         uePtr->UpdateDlTputVirtualQueue(totAssigned, timeSlot, m_dlAmc);
@@ -99,7 +101,9 @@ NrMacSchedulerOfdmaDPP::NotAssignedDlResources(
 {
     NS_LOG_FUNCTION(this);
     auto uePtr = std::dynamic_pointer_cast<NrMacSchedulerUeInfoDPP>(ue.first);
-    double timeSlot = 1e-3;
+    // double timeSlot = 1e-3;
+    // double timeSlot = 0.5e-3;
+    double timeSlot = m_timeSlot;
     uePtr->UpdateDlTputVirtualQueue(assigned, timeSlot, m_dlAmc);
 }
 
@@ -297,6 +301,17 @@ NrMacSchedulerOfdmaDPP::UpdateUeDlGfbr(uint16_t rnti,
 //             }
 //         }
 //     }
+}
+void 
+NrMacSchedulerOfdmaDPP::SetTimeSlot(double timeslot)
+{
+    m_timeSlot = timeslot;
+}
+
+double 
+NrMacSchedulerOfdmaDPP::GetTimeSlot() const
+{
+    return m_timeSlot;
 }
 
 } // namespace ns3

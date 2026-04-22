@@ -22,25 +22,77 @@ NS_LOG_COMPONENT_DEFINE("TrafficGenerator3gppGenericVideo");
 NS_OBJECT_ENSURE_REGISTERED(TrafficGenerator3gppGenericVideo);
 
 
+// void
+// TrafficGenerator3gppGenericVideo::SetDynamicDataRate(double newRateMbps)
+// {
+//     m_dataRate = newRateMbps;
+
+//     // Recompute mean packet size
+//     m_meanPacketSize = (m_dataRate * 1e6) / (m_fps) / 8;
+
+//     // Recreate packet size random variable
+//     m_packetSize = CreateObject<NormalRandomVariable>();
+//     m_packetSize->SetAttribute("Mean", DoubleValue(m_meanPacketSize));
+//     m_packetSize->SetAttribute("Variance",
+//         DoubleValue(m_stdRatioPacketSize * m_meanPacketSize));
+
+//     NS_LOG_INFO("Dynamic DataRate update → "
+//                 << m_dataRate << " Mbps, "
+//                 << "meanPacketSize=" << m_meanPacketSize);
+// }
+
+// void
+// TrafficGenerator3gppGenericVideo::SetDynamicDataRate(double newRateMbps)
+// {
+//     m_dataRate = newRateMbps;
+
+//     // 1. Safety limit: Max IPv4 packet size is ~65KB. 
+//     // We cap it at 60,000 bytes to safely leave room for UDP/IP/GTP/PDCP headers.
+//     const double MAX_PACKET_SIZE_BYTES = 60000.0; 
+
+//     // 2. Standard math
+//     m_meanPacketSize = (m_dataRate * 1e6) / (m_fps) / 8;
+
+//     // 3. THE FIX: If the packet size exceeds the IP limit, artificially increase the 
+//     // packet generation rate (FPS) so the packets become smaller and legal!
+//     if (m_meanPacketSize > MAX_PACKET_SIZE_BYTES) 
+//     {
+//         m_fps = (m_dataRate * 1e6) / (MAX_PACKET_SIZE_BYTES * 8);
+//         m_meanPacketSize = MAX_PACKET_SIZE_BYTES;
+//         NS_LOG_INFO("Data rate too high for single packet! Dynamically increased packet FPS to: " << m_fps);
+//     }
+
+//     // 4. Update the packet size random generator
+//     m_packetSize = CreateObject<NormalRandomVariable>();
+//     m_packetSize->SetAttribute("Mean", DoubleValue(m_meanPacketSize));
+//     m_packetSize->SetAttribute("Variance", DoubleValue(m_stdRatioPacketSize * m_meanPacketSize));
+// }
 void
 TrafficGenerator3gppGenericVideo::SetDynamicDataRate(double newRateMbps)
 {
     m_dataRate = newRateMbps;
 
-    // Recompute mean packet size
+    // 1. THE FIX: Reset FPS to standard 60 to prevent permanent tiny inter-arrival times
+    m_fps = 60.0; 
+
+    // 2. Safety limit: Max IPv4 packet size
+    const double MAX_PACKET_SIZE_BYTES = 60000.0; 
+
+    // 3. Standard math
     m_meanPacketSize = (m_dataRate * 1e6) / (m_fps) / 8;
 
-    // Recreate packet size random variable
+    // 4. If the packet size exceeds the IP limit, artificially increase the FPS
+    if (m_meanPacketSize > MAX_PACKET_SIZE_BYTES) 
+    {
+        m_fps = (m_dataRate * 1e6) / (MAX_PACKET_SIZE_BYTES * 8);
+        m_meanPacketSize = MAX_PACKET_SIZE_BYTES;
+    }
+
+    // 5. Update the packet size random generator
     m_packetSize = CreateObject<NormalRandomVariable>();
     m_packetSize->SetAttribute("Mean", DoubleValue(m_meanPacketSize));
-    m_packetSize->SetAttribute("Variance",
-        DoubleValue(m_stdRatioPacketSize * m_meanPacketSize));
-
-    NS_LOG_INFO("Dynamic DataRate update → "
-                << m_dataRate << " Mbps, "
-                << "meanPacketSize=" << m_meanPacketSize);
+    m_packetSize->SetAttribute("Variance", DoubleValue(m_stdRatioPacketSize * m_meanPacketSize));
 }
-
 
 TypeId
 TrafficGenerator3gppGenericVideo::GetTypeId()
@@ -289,6 +341,12 @@ uint32_t
 TrafficGenerator3gppGenericVideo::GetNextPacketSize() const
 {
     NS_LOG_FUNCTION(this);
+    // FIX: Prevent infinite loop when data rate drops to 0
+    if (m_meanPacketSize < 1.0) 
+    {
+        return 1; // Return 1 byte (minimum payload) when traffic is muted
+    }
+
     uint32_t packetSize = 0;
     while (1)
     {

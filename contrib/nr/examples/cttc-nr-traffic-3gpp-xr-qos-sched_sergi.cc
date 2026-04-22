@@ -12,6 +12,7 @@
 #include "ns3/internet-apps-module.h"
 #include "ns3/internet-module.h"
 #include "ns3/lte-enb-rrc.h"
+#include "ns3/lte-rlc-um.h"
 #include "ns3/lte-ue-rrc.h"
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
@@ -19,7 +20,8 @@
 #include "ns3/packet-sink.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/xr-traffic-mixer-helper.h"
-
+// #include "json.hpp"
+#include "/home/sergi/5glena-lyapunov-mac-scheduler/json.hpp"
 #include <vector>
 #include <fstream>
 #include <iomanip>
@@ -39,10 +41,14 @@
  */
 
 using namespace ns3;
+using json = nlohmann::json;
 
 NS_LOG_COMPONENT_DEFINE("CttcNrTraffic3gppXrNeco");
 
-std::vector<std::string> ParseStringList(const std::string& input)
+
+
+std::vector<std::string> 
+ParseStringList(const std::string& input)
 {
     std::vector<std::string> result;
     std::stringstream ss(input);
@@ -56,15 +62,26 @@ std::vector<std::string> ParseStringList(const std::string& input)
     return result;
 }
 
-struct UeDynamicContext
-{
-    Ptr<TrafficGenerator3gppGenericVideo> video;
-    Ptr<NrUeNetDevice> ueDev;
-    std::vector<uint64_t> traffic;
-    std::vector<uint64_t> gbr;
-    uint32_t index;
+
+
+struct UeIntervalStats {
+    uint64_t lastRxBytes = 0;
+    uint64_t lastRxPackets = 0;
+    uint64_t lastTxPackets = 0;
+    double lastDelaySumSec = 0;
 };
 
+struct UeDynamicContext {
+    Ptr<TrafficGenerator3gppGenericVideo> video;
+    Ptr<NrUeNetDevice> ueDev;
+    Ptr<PacketSink> sink;
+    std::vector<uint64_t> traffic;
+    std::vector<uint64_t> gbr;
+    uint32_t index = 0;
+    uint16_t rnti = 0;
+    uint32_t jsonId = 0; // <--- ADD THIS
+    UeIntervalStats tracker; // <--- ADD THIS HERE
+};
 
 
 EpsBearer::Qci
@@ -96,102 +113,126 @@ GetQciFromString(const std::string& qciStr)
         return values;
     }
 
-void
-PeriodicUpdate(Ptr<TrafficGenerator3gppGenericVideo> video,
-               Ptr<NrMacSchedulerOfdmaDPP> sched,
-               Ptr<NrUeNetDevice> ueDev,
-               std::vector<uint64_t> traffic,
-               std::vector<uint64_t> gbr,
-               uint32_t index,
-               double interval)
-{
-uint16_t rnti = ueDev->GetRrc()->GetRnti();
-    std::cout << "[PERIODIC] Time "
-          << Simulator::Now().GetSeconds()
-          << " UE " << rnti
-          << " index=" << index
-          << std::endl;
 
-    static std::ofstream debugFile("debug_updates.csv", std::ios::out);
-    static bool headerWritten = false;    
-
-    if (!headerWritten)
-    {
-        debugFile << "Time(s)\tRNTI\tTraffic(Mbps)\tGFBR(Mbps)\n";
-        headerWritten = true;
-    }
-
-    if (index >= traffic.size() || index >= gbr.size())
-        return;
-
-    uint64_t newTraffic = traffic[index];
-    uint64_t newGbr = gbr[index];
-    
-    // video->SetAttribute("DataRate", DoubleValue(newTraffic / 1e6));
-    video->SetDynamicDataRate(newTraffic / 1e6);
-    sched->UpdateUeDlGfbr(rnti, newGbr);
-
-    debugFile << Simulator::Now().GetSeconds() << "\t"
-              << rnti << "\t"
-              << newTraffic / 1e6 << "\t"
-              << newGbr / 1e6 << "\n";
+std::map<uint16_t, uint32_t> g_intervalAllocatedRBs;
 
 
-    debugFile.flush();   // ensures writing immediately
 
-
-    std::cout << "Time "
-              << Simulator::Now().GetSeconds()
-              << "s → Traffic="
-              << newTraffic/1e6
-              << " Mbps, GFBR="
-              << newGbr/1e6
-              << " Mbps"
-              << std::endl;
-
-    Simulator::Schedule(Seconds(interval),
-    [=]() {
-        PeriodicUpdate(video,
-                       sched,
-                       ueDev,
-                       traffic,
-                       gbr,
-                       index + 1,
-                       interval);
-    });
-
-    
+namespace ns3 {
+    extern std::map<uint16_t, uint32_t> g_intervalAllocatedRBs;
 }
 
-void
-CalculateThroughputAll(std::vector<Ptr<PacketSink>> sinks,
-                       std::vector<uint64_t> *lastTotalRx,
-                       std::ofstream *outFile,
-                       double interval)
+void MasterLogger(std::vector<UeDynamicContext> *ues,
+                  Ptr<NrMacScheduler> baseSched,
+                  Ptr<FlowMonitor> flowMon,
+                  Ptr<Ipv4FlowClassifier> classifier,
+                  double interval,
+                  std::string filename)
 {
+    static bool headerWritten = false;
+    std::ofstream unifiedFile;
+    unifiedFile.open(filename, std::ios_base::app);
+
+    if (!headerWritten) {
+        unifiedFile << "Time(s),UE_ID,RNTI,TargetTraffic(Mbps),GFBR(Mbps),MeasuredThroughput(Mbps),MeasuredDelay(ms),PacketRate(pps),DropRate,AllocatedRBGs\n";
+        headerWritten = true;
+    }
+    // 1. DYNAMICALLY FETCH RNTI
+    // By 0.4s, the UEs will be attached and will have an RNTI > 0
+    for (auto &ctx : *ues) {
+        uint16_t currentRnti = ctx.ueDev->GetRrc()->GetRnti();
+        if (currentRnti > 0) {
+            ctx.rnti = currentRnti;
+        }
+    }
+    // 1. Sort the vector by RNTI every single tick to ensure 1, 2, 3... order
+   // 2. Change the Sort to use jsonId instead of rnti
+        std::sort(ues->begin(), ues->end(), [](const UeDynamicContext& a, const UeDynamicContext& b) {
+            return a.jsonId < b.jsonId; // <--- Sort by JSON order!
+        });
+
     double now = Simulator::Now().GetSeconds();
 
-    (*outFile) << now;
+    for (uint32_t i = 0; i < ues->size(); ++i) {
+        UeDynamicContext &ctx = (*ues)[i];
+        // UeIntervalStats *tracker = trackers[i];
+        uint16_t rnti = ctx.rnti;
 
-    for (uint32_t i = 0; i < sinks.size(); ++i)
-    {
-        uint64_t cur = sinks[i]->GetTotalRx();
-        double throughput = (cur - (*lastTotalRx)[i]) * 8.0
-                            / (interval * 1e6);  // Mbps
+        // --- CALCULATION LOGIC ---
+        double throughputMbps = 0.0;
+        if (ctx.sink) {
+            uint64_t curRxBytes = ctx.sink->GetTotalRx();
+            throughputMbps = (curRxBytes - ctx.tracker.lastRxBytes) * 8.0 / (interval * 1e6);
+            ctx.tracker.lastRxBytes = curRxBytes;
+        }
 
-        (*outFile) << "," << throughput;
+        double intervalDelayMs = 0.0;
+        double packetRatePps = 0.0;
+        double dropRateInterval = 0.0;
 
-        (*lastTotalRx)[i] = cur;
+        Ptr<Ipv4> ipv4 = ctx.ueDev->GetNode()->GetObject<Ipv4>();
+        Ipv4Address ueIp = ipv4->GetAddress(1, 0).GetLocal();
+   
+        std::map<FlowId, FlowMonitor::FlowStats> stats = flowMon->GetFlowStats();
+
+        for (auto const& [id, stat] : stats) {
+            if (classifier->FindFlow(id).destinationAddress == ueIp) {
+                
+                // 1. Cast to signed integers to prevent wrap-around underflow
+                int64_t rxInInterval = static_cast<int64_t>(stat.rxPackets) - static_cast<int64_t>(ctx.tracker.lastRxPackets);
+                int64_t txInInterval = static_cast<int64_t>(stat.txPackets) - static_cast<int64_t>(ctx.tracker.lastTxPackets);
+                
+                // 2. Safely calculate Packet Rate
+                packetRatePps = (rxInInterval > 0) ? static_cast<double>(rxInInterval) / interval : 0.0;
+                
+                // 3. Safely calculate Drop Rate
+                if (txInInterval > 0) {
+                    double loss = static_cast<double>(txInInterval - rxInInterval);
+                    // Only calculate drop rate if loss is actually positive
+                    dropRateInterval = (loss > 0) ? loss / static_cast<double>(txInInterval) : 0.0;
+                } else {
+                    dropRateInterval = 0.0;
+                }
+
+                // 4. Calculate Delay
+                if (rxInInterval > 0) {
+                    intervalDelayMs = ((stat.delaySum.GetSeconds() - ctx.tracker.lastDelaySumSec) / rxInInterval) * 1000.0;
+                }
+                
+                // 5. Save state for next interval
+                ctx.tracker.lastRxPackets = stat.rxPackets;
+                ctx.tracker.lastTxPackets = stat.txPackets;
+                ctx.tracker.lastDelaySumSec = stat.delaySum.GetSeconds();
+                break;
+            }
+        }
+
+        double pastTraffic = (ctx.index > 0) ? (ctx.traffic[ctx.index - 1] / 1e6) : 0.0;
+        double pastGfbr = (ctx.index > 0) ? (ctx.gbr[ctx.index - 1] / 1e6) : 0.0;
+        uint32_t rbgThisInterval = ns3::g_intervalAllocatedRBs[rnti];
+        ns3::g_intervalAllocatedRBs[rnti] = 0;
+
+        // Write the line
+        unifiedFile << now << "," << ctx.jsonId << "," << rnti << "," << pastTraffic << "," << pastGfbr << "," 
+                    << throughputMbps << "," << intervalDelayMs << "," << packetRatePps << "," 
+                    << dropRateInterval << "," << rbgThisInterval << "\n";
+
+        // Update GFBR for next interval
+        if (ctx.index < ctx.traffic.size()) {
+            ctx.video->SetDynamicDataRate(ctx.traffic[ctx.index] / 1e6);
+            // if (auto qosSched = DynamicCast<NrMacSchedulerOfdmaQos>(baseSched)) qosSched->UpdateUeDlGfbr(rnti, ctx.gbr[ctx.index]);
+            if (auto dppSched = DynamicCast<NrMacSchedulerOfdmaDPP>(baseSched)) dppSched->UpdateUeDlGfbr(rnti, ctx.gbr[ctx.index]);
+            ctx.index++;
+        }
     }
+    unifiedFile.close();
 
-    (*outFile) << std::endl;
-
-    Simulator::Schedule(Seconds(interval),
-                        &CalculateThroughputAll,
-                        sinks,
-                        lastTotalRx,
-                        outFile,
-                        interval);
+    // Schedule the next master tick
+    // Simulator::Schedule(Seconds(interval), &MasterLogger, ues, baseSched, flowMon, classifier, trackers, interval, filename);
+    // Re-schedule
+    Simulator::Schedule(Seconds(interval), [=]() {
+        MasterLogger(ues, baseSched, flowMon, classifier, interval, filename);
+    });
 }
 
 void
@@ -330,30 +371,36 @@ main(int argc, char* argv[])
     // set simulation time and mobility
     uint32_t appDuration = 10000;
     uint32_t appStartTimeMs = 400;
-    uint16_t numerology = 1; // Default is 0, but we need more bandwidth to accommodate the traffic profiles with the default parameters 
+    uint16_t numerology = 0; // Default is 0, but we need more bandwidth to accommodate the traffic profiles with the default parameters , 1 for increasing bw
     
     uint16_t vrUeNum = 4;
     
     double centralFrequency = 4e9;
-    double bandwidth = 100e6; // Default is 10Mhz, but we need more bandwidth to accommodate the traffic profiles with the default parameters
-    double txPower = 46 ;  // 41 original
+    double bandwidth = 10e6; // Default is 10Mhz, but we need more bandwidth to accommodate the traffic profiles with the default parameters, 100 MHz for increasing bw
+    double txPower = 41 ;  // 41 original , 46 for increasing bw
     bool isMx1 = true;
     bool useUdp = true;
-    double distance = 50; // 450 original
+    double distance = 450; // 450 original, 50 for increasing bw
     uint32_t rngRun = 1;
     double dppV = 0.0;
     bool enableVirtualQueue = true;
 
+    uint32_t buffersize = 1250000; // in bytes, corresponds to 1 second of buffering at 1 Gbps. Adjust as needed.
+
     double Datarate = 5; // Mbps, default value for the video traffic generator
 
-    uint64_t CGgbrDL = 0; // default (bps)
+    // uint64_t CGgbrDL = 0; // default (bps)
     std::string rateProfileStr;
 
     std::string trafficProfileStr;
     std::string gbrProfileStr;
     double traceInterval = 1.0;
     std::vector<Ptr<TrafficGenerator3gppGenericVideo>> allVideoPtrs;
+    std::string unified_name = "unified_stats.csv";
 
+    // 1. Define your variables with default fallback values
+    double qosSymbolsPerSec = 14000; // For numerology = 0 
+    double dppTimeSlot = 1e-3;     // For DPP, we can use a 1 ms time slot as an example. Adjust as needed.
     
     
 
@@ -363,10 +410,12 @@ main(int argc, char* argv[])
     double trafficInterval = 0.2;   // fast scale
     double gfbrInterval = 30.0;     // slow scale
 
+    std::string configFile;
+
 
 
     // MAC scheduler type: RR, PF, MR, Qos, DPP
-    std::string schedulerType = "DPP";
+    std::string schedulerType = "Qos";
     bool enableOfdma = true;
 
     bool logging = false;
@@ -410,7 +459,77 @@ main(int argc, char* argv[])
     cmd.AddValue("fiveQiProfiles", "Per UE 5QI separated by |",fiveQiProfilesStr);
     cmd.AddValue("trafficInterval", "Traffic update interval (seconds)", trafficInterval);
     cmd.AddValue("gfbrInterval", "GFBR update interval (seconds)", gfbrInterval);
+    cmd.AddValue("configFile", "JSON scenario file", configFile);
+    cmd.AddValue("unifiedName", "Filename for unified stats output", unified_name);
+    
+    cmd.AddValue("qosSymPerSec", "Symbols per sec for QoS Scheduler", qosSymbolsPerSec);
+    cmd.AddValue("dppTimeSlot", "Timeslot duration for DPP Scheduler", dppTimeSlot);
+    cmd.AddValue("buffersize", "Buffer size in bytes for RLC", buffersize);
     cmd.Parse(argc, argv);
+
+
+
+    // ===============================
+// JSON CONFIG PARSING
+// ===============================
+
+std::vector<std::string> fiveQiStringsJson;
+std::vector<std::string> trafficStringsJson;
+std::vector<std::string> gbrStringsJson;
+
+if (!configFile.empty())
+{
+    std::ifstream f(configFile);
+    if (!f.is_open())
+    {
+        NS_ABORT_MSG("Could not open config file: " + configFile);
+    }
+
+    json config = json::parse(f);
+
+    // Global parameters
+    if (config.contains("trace_interval"))
+        traceInterval = config["trace_interval"];
+
+    // if (config.contains("scheduler"))
+    //     schedulerType = config["scheduler"];
+
+    if (config.contains("ues"))
+    {
+        auto ues = config["ues"];
+
+        vrUeNum = ues.size();
+
+        for (auto& ue : ues)
+        {
+            // 5QI
+            fiveQiStringsJson.push_back(ue["fiveqi"]);
+
+            // Traffic vector → convert to comma-separated string
+            std::stringstream trafficStream;
+            for (size_t i = 0; i < ue["traffic_bps"].size(); ++i)
+            {
+                trafficStream << ue["traffic_bps"][i];
+                if (i != ue["traffic_bps"].size() - 1)
+                    trafficStream << ",";
+            }
+            trafficStringsJson.push_back(trafficStream.str());
+
+            // GBR vector → convert to comma-separated string
+            std::stringstream gbrStream;
+            for (size_t i = 0; i < ue["gfbr_bps"].size(); ++i)
+            {
+                gbrStream << ue["gfbr_bps"][i];
+                if (i != ue["gfbr_bps"].size() - 1)
+                    gbrStream << ",";
+            }
+            gbrStringsJson.push_back(gbrStream.str());
+        }
+    }
+
+    std::cout << "Loaded scenario from JSON: " << configFile << std::endl;
+    std::cout << "Number of UEs: " << vrUeNum << std::endl;
+}
 
     // NS_ABORT_MSG_IF(appDuration < 1000, "The appDuration should be at least 1000ms.");
     NS_ABORT_MSG_IF(
@@ -427,15 +546,24 @@ main(int argc, char* argv[])
     }
 
     
-    
-    std::vector<uint64_t> trafficProfile;
-    std::vector<uint64_t> gbrProfile;
-
-    auto fiveQiStrings = ParseStringList(fiveQiProfilesStr);
-    auto trafficStrings = ParseStringList(trafficProfileStr);
-    auto gbrStrings = ParseStringList(gbrProfileStr);
 
 
+    std::vector<std::string> fiveQiStrings;
+    std::vector<std::string> trafficStrings;
+    std::vector<std::string> gbrStrings;
+
+    if (!configFile.empty())
+    {
+        fiveQiStrings = fiveQiStringsJson;
+        trafficStrings = trafficStringsJson;
+        gbrStrings = gbrStringsJson;
+    }
+    else
+    {
+        fiveQiStrings = ParseStringList(fiveQiProfilesStr);
+        trafficStrings = ParseStringList(trafficProfileStr);
+        gbrStrings = ParseStringList(gbrProfileStr);
+    }
    
    
 
@@ -474,12 +602,17 @@ main(int argc, char* argv[])
     nrHelper->SetUePhyAttribute("TxPower", DoubleValue(23));
     nrHelper->SetUePhyAttribute("NoiseFigure", DoubleValue(7));
 
-    Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(999999999));
+    // -------------------------------------------------------------------------
+    // RLC Buffer Sizing based on 3GPP Delay Budgets
+    // -------------------------------------------------------------------------
+
+        // 1. GBR_CONV_VIDEO (150 ms limit @ 50 Mbps)
+    Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(buffersize));
+
     Config::SetDefault("ns3::LteEnbRrc::EpsBearerToRlcMapping",
                        EnumValue(useUdp ? LteEnbRrc::RLC_UM_ALWAYS : LteEnbRrc::RLC_AM_ALWAYS));
             
-    Config::SetDefault("ns3::NrMacSchedulerOfdmaDPP::DppV", DoubleValue(dppV));
-    Config::SetDefault("ns3::NrMacSchedulerOfdmaDPP::enableVirtualQueue", BooleanValue(true));                       
+                
 
     nrHelper->SetGnbAntennaAttribute("NumRows", UintegerValue(4));
     nrHelper->SetGnbAntennaAttribute("NumColumns", UintegerValue(8));
@@ -543,11 +676,7 @@ main(int argc, char* argv[])
         mobility.Install(ueNodes.Get(i));
     }
 
-    /*
-     * Create various NodeContainer(s) for the different traffic types.
-     * In ueArContainer, ueVrContainer, ueCgContainer, we will put
-     * AR, VR, CG UEs, respectively.*/
-    
+
     NodeContainer ueVrContainer;
     
 
@@ -567,12 +696,15 @@ main(int argc, char* argv[])
     Ptr<NrMacScheduler> baseSched =
     nrHelper->GetScheduler(gNbNetDev.Get(0), 0); // get the scheduler of the first gNB and first BWP
 
-    Ptr<NrMacSchedulerOfdmaDPP> dppSched =
-    DynamicCast<NrMacSchedulerOfdmaDPP>(baseSched);
+    
+    if (auto dppSched = DynamicCast<NrMacSchedulerOfdmaDPP>(baseSched)) 
+    {
+        // Call the setter method you created inside your DPP scheduler class
+        dppSched->SetTimeSlot(dppTimeSlot); 
+        std::cout << "DPP Scheduler loaded. Timeslot set to: " << dppTimeSlot << "\n";
+    }
 
-    NS_ASSERT(dppSched);
-
-    //////////////////////////////////////////////////
+    
 
     int64_t randomStream = 1;
     randomStream += nrHelper->AssignStreams(gNbNetDev, randomStream);
@@ -634,8 +766,15 @@ main(int argc, char* argv[])
 
     // attach UEs to the closest eNB
     
-    nrHelper->AttachToClosestEnb(ueVrNetDev, gNbNetDev);
-    
+
+    for (uint32_t i = 0; i < ueVrNetDev.GetN(); ++i)
+    {
+        NetDeviceContainer singleUeContainer;
+        singleUeContainer.Add(ueVrNetDev.Get(i));
+        // Attach one by one to force sequential RNTI assignment (1, 2, 3...)
+        nrHelper->AttachToClosestEnb(singleUeContainer, gNbNetDev);
+    }
+        
 
 
 
@@ -648,15 +787,12 @@ main(int argc, char* argv[])
     uint16_t dlPortVrStart = 1131;
       
 
-
-
     Ptr<EpcTft> vrTft = Create<EpcTft>();
     EpcTft::PacketFilter dlpfVr;
     dlpfVr.localPortStart = dlPortVrStart;
     dlpfVr.localPortEnd = dlPortVrStart;
     vrTft->Add(dlpfVr);
 
- 
  
 
     // Install traffic generators
@@ -683,6 +819,16 @@ main(int argc, char* argv[])
 
     allVideoPtrs = videoPtrs;
     NS_ASSERT(allVideoPtrs.size() == trafficStrings.size());
+    
+    std::vector<Ptr<PacketSink>> sinks;
+    for (uint32_t i = 0; i < serverApps.GetN(); ++i)
+{
+    Ptr<PacketSink> sink =
+        DynamicCast<PacketSink>(serverApps.Get(i));
+
+    if (sink)
+        sinks.push_back(sink);
+}
 
     for (uint32_t i = 0; i < allVideoPtrs.size(); ++i)
     {
@@ -690,12 +836,14 @@ main(int argc, char* argv[])
         ctx.video = allVideoPtrs[i];
         // ctx.rnti = rntiList[i];
         ctx.ueDev = DynamicCast<NrUeNetDevice>(ueVrNetDev.Get(i));
+        ctx.sink = sinks[i]; // <--- Link the sink here
 
         // ctx.traffic = trafficProfile;   // full vector
         // ctx.gbr = gbrProfile;      
         ctx.traffic = ParseProfile(trafficStrings[i]);
         ctx.gbr = ParseProfile(gbrStrings[i]);     // full vector
         ctx.index = 0;   // IMPORTANT
+        ctx.jsonId = i + 1;
 
         dynamicUes.push_back(ctx);
 
@@ -724,73 +872,8 @@ main(int argc, char* argv[])
 
 
 
-    std::vector<Ptr<PacketSink>> sinks;
-
-
-
-for (uint32_t i = 0; i < serverApps.GetN(); ++i)
-{
-    Ptr<PacketSink> sink =
-        DynamicCast<PacketSink>(serverApps.Get(i));
-
-    if (sink)
-        sinks.push_back(sink);
-}
-std::vector<uint64_t> *lastTotalRx =
-    new std::vector<uint64_t>(sinks.size(), 0);
-
-std::ofstream thputFile("throughput_per_ue.csv");
-
-thputFile << "Time";
-for (uint32_t i = 0; i < sinks.size(); ++i)
-{
-    thputFile << ",UE" << i;
-}
-thputFile << std::endl;
-
 double interval = traceInterval;
-// double interval = 0.2;  // 200 ms
-
-Simulator::Schedule(Seconds(interval),
-                    &CalculateThroughputAll,
-                    sinks,
-                    lastTotalRx,
-                    &thputFile,
-                    interval);
-
-for (auto &ctx : dynamicUes)
-{
-    double initialRateBps = ctx.traffic[0];
-
-
-    ctx.video->SetAttribute(
-        "DataRate",
-        DoubleValue(initialRateBps / 1e6)  // Mbps
-    );
-
-    std::cout << "[INITIAL SET] ptr=" << ctx.video.operator->()
-              << " rate=" << initialRateBps / 1e6
-              << " Mbps"
-              << std::endl;
-   
-
-    Simulator::Schedule(Seconds(appStartTimeMs/1000.0),
-    [=]() {
-        PeriodicUpdate(ctx.video,
-               dppSched,
-               ctx.ueDev,
-               ctx.traffic,
-               ctx.gbr,
-               0u,
-               interval);
-    });
-                    
-}
 std::cout << "dynamicUes size = " << dynamicUes.size() << std::endl;
-
-
-
-
 
     FlowMonitorHelper flowmonHelper;
     NodeContainer endpointNodes;
@@ -803,39 +886,8 @@ std::cout << "dynamicUes size = " << dynamicUes.size() << std::endl;
     monitor->SetAttribute("PacketSizeBinWidth", DoubleValue(20));
 
     Simulator::Stop(MilliSeconds(simTimeMs));
-    Simulator::Run();
-
-
-    /////// This part is for writing the results in a file dynamically, for tmux ////////
-    // std::ostringstream filename;
-
-    // // Convert CGgbrDL to Mbps (like in your python int(CGgbrDL/1e6))
-    // uint64_t cgGbrMbps = CGgbrDL / 1000000;
-
-    // // Build filename exactly like your python script
-    // filename << "sim_DR_GFBR_analysis/"
-    //         << cgUeNum << "_CG_" << vrUeNum << "_VR/"
-    //         << "res" << schedulerType << "_"
-    //         << Datarate << "_DR_"
-    //         << cgGbrMbps << "_GFBR_"
-    //         << cgUeNum << "_CG_"
-    //         << vrUeNum << "_VR.txt";
-
-    // // Create directory if needed (Linux/macOS)
-    // std::string dir = "sim_DR_GFBR_analysis/" +
-    //                 std::to_string(cgUeNum) + "_CG_" +
-    //                 std::to_string(vrUeNum) + "_VR/";
-
-    // system(("mkdir -p " + dir).c_str());
-
-    // std::ofstream outputFile(filename.str());
-
-    /////////////////////////////////////////////////////////////////////////////////////////
-    
+        
     std::ofstream outputFile("res.txt");
-
-    
-    
 
     outputFile << "Thput\tRx\tDuration\n";
 
@@ -848,6 +900,31 @@ std::cout << "dynamicUes size = " << dynamicUes.size() << std::endl;
     double averageFlowThroughput = 0.0;
     double averageFlowDelay = 0.0;
 
+std::sort(dynamicUes.begin(), dynamicUes.end(), [](const UeDynamicContext& a, const UeDynamicContext& b) {
+    return a.ueDev->GetRrc()->GetRnti() < b.ueDev->GetRrc()->GetRnti();
+});
+
+std::vector<UeIntervalStats*> trackers;
+for (uint32_t i = 0; i < dynamicUes.size(); ++i) {
+    // This uses the variable, so the warning disappears
+    dynamicUes[i].rnti = dynamicUes[i].ueDev->GetRrc()->GetRnti();
+    trackers.push_back(new UeIntervalStats());
+}
+
+auto ues_ptr = &dynamicUes;
+
+// Start the logger
+Simulator::Schedule(Seconds(appStartTimeMs / 1000.0), [=]() {
+    MasterLogger(ues_ptr, 
+                 Ptr<NrMacScheduler>(baseSched), 
+                 monitor, 
+                 classifier, 
+                 (double)interval, 
+                 (std::string)unified_name);
+});
+
+Simulator::Run();
+    
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin();
          i != stats.end();
          ++i)
@@ -886,10 +963,6 @@ std::cout << "dynamicUes size = " << dynamicUes.size() << std::endl;
             double jitter = 1000 * i->second.jitterSum.GetSeconds() / i->second.rxPackets;
 
             std::cout << "  Throughput: " << throughput << " Mbps\n";
-            // std::cout << i->second.rxBytes * 8.0 << " / " << rxDuration.GetSeconds() << std::endl;
-            // std::cout << "tf = " << i->second.timeLastRxPacket << " t0 = " << i->second.timeFirstTxPacket << std::endl;
-            // double thput_prueba = ((i->second.rxBytes * 8.0) / txDuration.GetSeconds()) * 1e-6;
-            // std::cout << "  Throughput*: " << thput_prueba << " Mbps\n";
             std::cout << "  Mean delay:  " << delay << " ms\n";
             std::cout << "  Mean jitter:  " << jitter << " ms\n";
 

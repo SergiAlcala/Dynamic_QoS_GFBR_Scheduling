@@ -64,6 +64,13 @@ class NrMacSchedulerOfdmaDPP : public NrMacSchedulerOfdma
     //double GetVlyapunov() const;
     void UpdateUeDlGfbr(uint16_t rnti, uint64_t newGfbr);
 
+    void SetTimeSlot(double timeslot);
+
+    /**
+     * \brief Get the current timeslot duration
+     */
+    double GetTimeSlot() const;
+
   protected:
     /**
      * \brief Create an UE representation of the type NrMacSchedulerUeInfoDPP
@@ -143,6 +150,7 @@ class NrMacSchedulerOfdmaDPP : public NrMacSchedulerOfdma
     bool m_enableVirtualQueue;
     mutable  std::unordered_map<uint16_t,
     std::shared_ptr<NrMacSchedulerUeInfoDPP>> m_dppUeMap;
+    double m_timeSlot {1e-3}; // Default value
 };
 
 } // namespace ns3

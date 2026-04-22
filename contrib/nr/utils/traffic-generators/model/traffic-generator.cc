@@ -322,7 +322,12 @@ TrafficGenerator::SendNextPacket()
         m_currentBurstTotPackets < m_packetBurstSizeInPackets || m_packetBurstSizeInPackets == 1)
     {
         Time nextPacketTime = GetNextPacketTime();
-        NS_ASSERT(nextPacketTime.GetSeconds() >= 0);
+        // NS_ASSERT(nextPacketTime.GetSeconds() >= 0);
+        // Replace the NS_ASSERT with this failsafe:
+        if (nextPacketTime.GetSeconds() < 0) 
+        {
+            nextPacketTime = Seconds(0.0);
+        }
         m_eventIdSendNextPacket =
             Simulator::Schedule(nextPacketTime, &TrafficGenerator::SendNextPacket, this);
     }

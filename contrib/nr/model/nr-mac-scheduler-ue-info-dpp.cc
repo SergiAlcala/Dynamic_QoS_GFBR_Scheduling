@@ -18,6 +18,8 @@
 
 namespace ns3
 {
+// At the top of the file:
+std::map<uint16_t, uint32_t> g_intervalAllocatedRBs;
 
 NS_LOG_COMPONENT_DEFINE("NrMacSchedulerUeInfoDPP");
 
@@ -29,6 +31,7 @@ std::ofstream outputFileAlpha("alpha.txt");
 
 static std::ofstream qosFile("qos_trace.csv");
 static bool qosHeaderWritten = false;
+
 
 
 
@@ -147,7 +150,12 @@ void NrMacSchedulerUeInfoDPP::saveRBGallocation(const std::vector<ns3::NrMacSche
     }
     c = false;
     for(const auto& ue: ueVector){
+        auto uePtr = std::dynamic_pointer_cast<NrMacSchedulerUeInfoDPP>(ue.first);
+
         outputFileAlpha << Simulator::Now().ToDouble (Time::MS) << "\t" << ue.first->m_rnti << "\t" << std::dynamic_pointer_cast<NrMacSchedulerUeInfoDPP>(ue.first)->m_dlRBGallocated << "\n";
+        // 2. NEW: Send the RBGs to the main script's CSV too!
+        g_intervalAllocatedRBs[ue.first->m_rnti] += uePtr->m_dlRBGallocated;
+    
     }
 }
 
